@@ -4,15 +4,17 @@ Xbox 遊戲對比工具 - 爬蟲層
 負責 API 請求和資料抓取
 """
 
-import requests
+import base64
 import json
 import time
-import base64
 import uuid
 from typing import Dict, List, Optional, Set
 from urllib.parse import quote
 
+import requests
+
 from dlc_identifier import is_game_base as _is_game_base
+
 
 class XboxScraper:
     """Xbox Store 爬蟲類"""
@@ -26,7 +28,7 @@ class XboxScraper:
     ):
         """
         初始化爬蟲
-        
+
         Args:
             auth_token: Xbox Live XBL3.0 token
             user_agent: 自訂 User-Agent
@@ -43,7 +45,9 @@ class XboxScraper:
 
         # API 設定
         self.api_base_url = "https://emerald.xboxservices.com/xboxcomfd/browse"
-        self.details_api_url = "https://emerald.xboxservices.com/xboxcomfd/productDetails"
+        self.details_api_url = (
+            "https://emerald.xboxservices.com/xboxcomfd/productDetails"
+        )
         self.channel_key = "BROWSE_CHANNELID=_FILTERS=PLAYWITH=XBOXONE,XBOXSERIESX|S"
 
     def _get_headers(self) -> Dict[str, str]:
@@ -94,10 +98,7 @@ class XboxScraper:
         filters_json = {
             "PlayWith": {
                 "id": "PlayWith",
-                "choices": [
-                    {"id": "XboxSeriesX|S"},
-                    {"id": "XboxOne"}
-                ]
+                "choices": [{"id": "XboxSeriesX|S"}, {"id": "XboxOne"}],
             }
         }
         filters_base64 = base64.b64encode(json.dumps(filters_json).encode()).decode()
@@ -121,7 +122,7 @@ class XboxScraper:
         locale: str,
         encoded_ct: str = "",
         orderby: str = None,
-        retry_count: int = 0
+        retry_count: int = 0,
     ) -> Optional[Dict]:
         """
         取得單一頁面
@@ -156,7 +157,9 @@ class XboxScraper:
                     wait_time = 5 * (retry_count + 1)
                     print(f"⏱️  被限流 (429)，等待 {wait_time} 秒後重試...")
                     time.sleep(wait_time)
-                    return self._fetch_page(locale, encoded_ct, orderby, retry_count + 1)
+                    return self._fetch_page(
+                        locale, encoded_ct, orderby, retry_count + 1
+                    )
                 else:
                     print("❌ 重試次數已達上限")
                     return None
@@ -169,7 +172,7 @@ class XboxScraper:
 
         except requests.exceptions.Timeout:
             if retry_count < 2:
-                print(f"⏱️  請求超時，重試中...")
+                print("⏱️  請求超時，重試中...")
                 time.sleep(2)
                 return self._fetch_page(locale, encoded_ct, orderby, retry_count + 1)
             return None
@@ -183,7 +186,7 @@ class XboxScraper:
         locale: str,
         max_pages: Optional[int] = None,
         skip_existing: Optional[Set[str]] = None,
-        orderby: str = None
+        orderby: str = None,
     ) -> Dict[str, Dict]:
         """
         枚舉某地區的所有遊戲
@@ -256,9 +259,11 @@ class XboxScraper:
                     page_game_count += 1
 
             # 統計資訊
-            total_in_region = response.get("channels", {}).get(
-                self.channel_key, {}
-            ).get("totalItems", 0)
+            total_in_region = (
+                response.get("channels", {})
+                .get(self.channel_key, {})
+                .get("totalItems", 0)
+            )
             print(f"✅ 第 {page_count} 頁：新增 {page_game_count} 款", end="")
             if skip_existing and skip_count > 0:
                 print(f"（跳過 {skip_count} 款）", end="")
@@ -290,13 +295,11 @@ class XboxScraper:
         return games
 
     def fetch_products_by_ids(
-        self,
-        product_ids: List[str],
-        locale: str
+        self, product_ids: List[str], locale: str
     ) -> Dict[str, Dict]:
         """
         V3.0 核心方法：透過產品 ID 列表直接進行批量精準查詢
-        
+
         Args:
             product_ids: ID 列表
             locale: 地區代碼
@@ -311,28 +314,30 @@ class XboxScraper:
         try:
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code != 200:
-                print(f"❌ 批量查詢 {locale} 失敗 (Status: {response.status_code}): {response.text[:200]}")
+                print(
+                    f"❌ 批量查詢 {locale} 失敗 (Status: {response.status_code}): {response.text[:200]}"
+                )
                 return {}
 
             data = response.json()
             results = {}
-            
+
             # 解析回傳的產品資訊
             # 注意：此 API 回傳的是以 ID 為鍵的字典，例如 {"PID1": {...}, "PID2": {...}}
             for pid, product in data.items():
                 if not isinstance(product, dict):
                     continue
-                
+
                 prices = product.get("specificPrices", {}).get("purchaseable", [])
                 title = product.get("title", "Unknown")
-                
+
                 results[pid] = {
                     "found": True,
                     "title": title,
                     "slug": quote(title),
                     "purchaseable": len(prices) > 0,
                     "price_list": prices,
-                    "is_base_game": self.is_game_base(product)
+                    "is_base_game": self.is_game_base(product),
                 }
             return results
 
@@ -344,10 +349,7 @@ class XboxScraper:
             return {}
 
     def check_target_games_v3(
-        self,
-        source_games: Dict[str, Dict],
-        target_locale: str,
-        batch_size: int = 5
+        self, source_games: Dict[str, Dict], target_locale: str, batch_size: int = 5
     ) -> Dict[str, Dict]:
         """
         V3.0 優化版檢查：直接針對 ID 清單向 API 點名，不再掃描分頁
@@ -357,14 +359,14 @@ class XboxScraper:
         total = len(product_ids)
 
         print(f"\n🚀 V3 模式：正在精準查詢 {total} 款遊戲在 {target_locale} 的狀態...")
-        
+
         for i in range(0, total, batch_size):
-            batch = product_ids[i:i + batch_size]
+            batch = product_ids[i : i + batch_size]
             print(f"   進度: {i}/{total} 款...", end="\r")
-            
+
             batch_results = self.fetch_products_by_ids(batch, target_locale)
             all_target_data.update(batch_results)
-            
+
             time.sleep(self.request_delay)
 
         # 補齊 API 完全沒回傳的 ID (視為 delisted)
@@ -379,7 +381,7 @@ class XboxScraper:
         locale: str,
         max_pages: Optional[int] = None,
         skip_existing: Optional[Set[str]] = None,
-        multi_sort: bool = True
+        multi_sort: bool = True,
     ) -> Dict:
         """
         用多種排序方式掃描遊戲，合併結果（去重）
@@ -438,7 +440,7 @@ class XboxScraper:
                 locale,
                 max_pages=max_pages,
                 skip_existing=skip_existing,
-                orderby=sort_method
+                orderby=sort_method,
             )
 
             games_by_sort[sort_label] = len(games)
@@ -456,8 +458,8 @@ class XboxScraper:
         # 統計結果
         print("\n" + "=" * 60)
         if multi_sort:
-            print(f"📊 多排序掃描完成：")
-            print(f"   各排序方式找到的遊戲數：")
+            print("📊 多排序掃描完成：")
+            print("   各排序方式找到的遊戲數：")
             for sort_label, count in games_by_sort.items():
                 new_count = new_games_by_sort[sort_label]
                 print(f"      [{sort_label}] {count} 款 (新增 {new_count} 款)")
@@ -465,12 +467,12 @@ class XboxScraper:
         print("=" * 60)
 
         return {
-            'games': all_games,
-            'summary': {
-                'total_games': len(all_games),
-                'games_by_sort': games_by_sort,
-                'new_games_by_sort': new_games_by_sort,
-            }
+            "games": all_games,
+            "summary": {
+                "total_games": len(all_games),
+                "games_by_sort": games_by_sort,
+                "new_games_by_sort": new_games_by_sort,
+            },
         }
 
     # Removed check_target_games and check_target_games_with_multiple_sorts as they are replaced by check_target_games_v3
@@ -504,8 +506,10 @@ class XboxScraper:
 
 # 測試用
 if __name__ == "__main__":
+    import os
+
     # 示例（需要有效的 AUTH_TOKEN）
-    auth_token = "your_token_here"
+    auth_token = os.getenv("XBOX_AUTH_TOKEN", "your_token_here")
     scraper = XboxScraper(auth_token)
 
     # 爬取日本商店的前 2 頁（測試）

@@ -5,7 +5,6 @@ Xbox 商店遊戲對比工具 - V3 版本
 """
 
 import argparse
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,7 +38,7 @@ MULTI_SORT = 0
 FILTER_DLC = 1
 
 # 需要從 DevTools 複製
-AUTH_TOKEN = os.getenv("XBOX_AUTH_TOKEN")  # 從環境變數讀取，或從命令行參數 --token 提供
+AUTH_TOKEN = ""  # 請在此輸入您的 XBL3.0 token（運行前請填入，commit 前請清空）
 
 REQUEST_DELAY = 1.5
 DELISTED_RECHECK_DAYS = 7
