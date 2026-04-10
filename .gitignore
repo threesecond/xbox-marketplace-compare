@@ -44,5 +44,5 @@ report.html
 jp_only_games.csv
 
 # AI tools
-.ai/token.txt
+.ai/
 .claude/
