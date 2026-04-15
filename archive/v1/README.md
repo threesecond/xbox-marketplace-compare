@@ -12,10 +12,10 @@
 
 ## 使用
 
-目前請使用根目錄的 **V2 版本**：
+目前請使用根目錄的 **V3 版本**：
 ```bash
-python xbox_compare_v2.py --browse-all 0  # 增量更新
-python xbox_compare_v2.py --browse-all 1  # 全量驗證
+python xbox_compare_v3.py --browse-all 0  # 增量更新
+python xbox_compare_v3.py --browse-all 1  # 全量驗證
 ```
 
 更多詳見根目錄的 `README.md`

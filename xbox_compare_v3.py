@@ -20,7 +20,7 @@ TARGET_LOCALE = "zh-TW"
 OUTPUT_CSV = "jp_only_games.csv"
 OUTPUT_HTML = "report.html"
 DB_PATH = "games.db"
-MAX_PAGES = 2  # 0 = 不限制頁數，測試時可設置為較小的值（如 5 或 10）
+MAX_PAGES = 50  # 0 = 不限制頁數，測試時可設置為較小的值（如 5 或 10）
 
 # 掃描模式
 # 0: 增量模式 - JP 找新遊戲, TW 只檢查 delisted/region-locked (快速，日常用)
@@ -39,6 +39,7 @@ FILTER_DLC = 1
 
 # 需要從 DevTools 複製
 AUTH_TOKEN = ""  # 請在此輸入您的 XBL3.0 token（運行前請填入，commit 前請清空）
+
 
 REQUEST_DELAY = 1.5
 DELISTED_RECHECK_DAYS = 7
@@ -64,19 +65,11 @@ class XboxMarketplaceComparerV3:
         self.scraper = None
 
     def _validate_auth_token(self) -> bool:
-        """驗證 auth token"""
+        """驗證 auth token（選填）"""
         if not self.auth_token:
-            print("❌ 錯誤：AUTH_TOKEN 未設定")
-            print("\n請按以下步驟設定：")
-            print("1. 登入 Xbox 帳號")
-            print("2. 訪問 https://www.xbox.com/ja-JP/games/browse?orderby=Title+Asc")
-            print("3. 打開 Chrome DevTools (F12)")
-            print("4. 進入 Network 標籤")
-            print("5. 找到 browse?locale=ja-JP 的 POST 請求")
-            print("6. 右鍵 → Copy → Copy as cURL")
-            print("7. 複製 Authorization header 的 token 值")
-            print('8. 貼到腳本頂部的 AUTH_TOKEN = "..."')
-            return False
+            print(
+                "  AUTH_TOKEN 未設定，以匿名模式執行（browse API 與 DisplayCatalog 均不需要 token）"
+            )
         return True
 
     def initialize_db(self) -> bool:

@@ -41,7 +41,7 @@ Thumbs.db
 games.db
 *.log
 report.html
-jp_only_games.csv
+*.csv
 
 # AI tools
 .ai/

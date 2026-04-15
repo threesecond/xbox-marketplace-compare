@@ -40,7 +40,7 @@ pip install requests jinja2
 SOURCE_LOCALE = "ja-JP"         # 源地區（日本）
 TARGET_LOCALE = "zh-TW"         # 目標地區（台灣）
 FILTER_DLC = 1                  # 1=只統計遊戲本體（推薦），0=包含所有產品
-MAX_PAGES = 1                   # 最多掃描頁數，0=全量掃描（僅作用於源地區掃描）
+MAX_PAGES = 0                   # 最多掃描頁數，0=全量掃描（僅作用於源地區掃描）
 OUTPUT_HTML = "report.html"
 DB_PATH = "games.db"
 
@@ -50,20 +50,13 @@ BROWSE_ALL = 1
 # 多排序搜尋：0=預設排序（快速），1=5種排序（完整）
 MULTI_SORT = 0
 
-# 需要從 DevTools 複製
-AUTH_TOKEN = "你的_XBL3.0_token"
+# AUTH_TOKEN 為選填，留空即可匿名執行
+AUTH_TOKEN = ""
 
 REQUEST_DELAY = 1.5  # 請求延遲（秒）
 ```
 
-**如何取得 token：**
-1. 登入你的 Xbox 帳號
-2. 訪問 https://www.xbox.com/ja-JP/games/browse
-3. 打開 Chrome DevTools (F12)
-4. 進入 Network 標籤
-5. 找到 `browse?locale=ja-JP` 的 POST 請求
-6. 複製 Authorization header 的 token 值
-7. 貼到 `AUTH_TOKEN` 中
+> **AUTH_TOKEN 已不再必填。** V3 改用 Microsoft DisplayCatalog 公開 API 查詢目標地區狀態，JP browse API 也支援匿名存取，直接留空執行即可。
 
 ### 3. 執行
 
@@ -377,8 +370,8 @@ A:
 2. 增加延遲：`--delay 2.0` 或 `--delay 3.0`
 3. 改用 `--browse-all 0` 避免掃描所有遊戲
 
-### Q: Token 過期了怎麼辦？
-A: 重新從 DevTools 複製最新 token，替換 `AUTH_TOKEN` 即可。
+### Q: 需要 Token 嗎？
+A: 不需要。V3 已改用 Microsoft DisplayCatalog 公開 API，`AUTH_TOKEN` 留空即可正常執行。
 
 ### Q: 資料庫損壞了？
 A: 直接刪除 `games.db`，下次運行會自動重建。注意：首次運行必須用 `--browse-all 1`。
@@ -390,6 +383,21 @@ A: 目前只支持日本 ↔ 台灣，後續版本計畫擴展。
 A: 這是正常的。如果頻繁更新報表，建議只在必要時使用 `--browse-all 1`，日常用 `--browse-all 0` 快速更新。
 
 ## 📝 更新日誌
+
+### V3.0 (2026-04-15) - 批量精準查詢 + 無需 Token
+
+**架構重大變更：**
+- ✨ **TW 端改用 Microsoft DisplayCatalog API** - 不再使用失效的 `productDetails` 端點
+  - 無需 AUTH_TOKEN，完全匿名執行
+  - 批量查詢 50+ 個 ID，效率大幅提升
+  - 回傳中文標題、TWD 價格、可購買狀態
+- ✨ **AUTH_TOKEN 改為選填** - JP browse API 同樣支援匿名，留空直接跑
+- ✨ **DLC 識別與過濾** (`filter_dlc` 參數) - 只統計遊戲本體，掃描時間減半
+
+**Bug 修復：**
+- 🐛 修復批量查詢 API 端點錯誤（原 `productDetails` 回傳 404）
+- 🐛 修復查詢失敗被誤判為「已下架」問題（原 batch_size=5 仍全數失敗）
+- 🐛 修復 `filter_dlc=0` 時誤將遊戲本體過濾掉的邏輯錯誤
 
 ### V2.1 (2026-04-08) - 速度優化版本 ⚡
 

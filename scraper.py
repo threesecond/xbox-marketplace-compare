@@ -45,9 +45,6 @@ class XboxScraper:
 
         # API 設定
         self.api_base_url = "https://emerald.xboxservices.com/xboxcomfd/browse"
-        self.details_api_url = (
-            "https://emerald.xboxservices.com/xboxcomfd/productDetails"
-        )
         self.channel_key = "BROWSE_CHANNELID=_FILTERS=PLAYWITH=XBOXONE,XBOXSERIESX|S"
 
     def _get_headers(self) -> Dict[str, str]:
@@ -243,11 +240,9 @@ class XboxScraper:
                     # DLC 過濾：根據 filter_dlc 參數決定是否包含
                     is_base_game = self.is_game_base(product)
                     if self.filter_dlc == 1 and not is_base_game:
-                        # filter_dlc=1 只統計遊戲本體，跳過 DLC
+                        # filter_dlc=1：只統計遊戲本體，跳過 DLC
                         continue
-                    elif self.filter_dlc == 0 and is_base_game:
-                        # filter_dlc=0 只統計 DLC，跳過遊戲本體
-                        continue
+                    # filter_dlc=0：統計所有產品（不跳過任何東西）
 
                     games[product_id] = {
                         "title": title,
@@ -298,21 +293,33 @@ class XboxScraper:
         self, product_ids: List[str], locale: str
     ) -> Dict[str, Dict]:
         """
-        V3.0 核心方法：透過產品 ID 列表直接進行批量精準查詢
+        V3.0 核心方法：透過 Microsoft DisplayCatalog API 批量查詢產品狀態
+
+        使用公開的 DisplayCatalog API，不需要 auth，支援 50+ 個 ID 批量查詢。
 
         Args:
             product_ids: ID 列表
-            locale: 地區代碼
+            locale: 地區代碼 (e.g., 'zh-TW', 'ja-JP')
         """
         if not product_ids:
             return {}
 
+        # 從 locale 解析 market (e.g., "zh-TW" -> "TW", "ja-JP" -> "JP")
+        market = locale.split("-")[-1] if "-" in locale else locale
+
         ids_str = ",".join(product_ids)
-        url = f"{self.details_api_url}?locale={locale}&productIds={ids_str}"
-        headers = self._get_headers()
+        ms_cv = f"{uuid.uuid4().hex.upper()}.0"
+        url = (
+            f"https://displaycatalog.mp.microsoft.com/v7.0/products"
+            f"?bigIds={ids_str}&market={market}&languages={locale}&MS-CV={ms_cv}"
+        )
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "*/*",
+        }
 
         try:
-            response = requests.get(url, headers=headers, timeout=15)
+            response = requests.get(url, headers=headers, timeout=30)
             if response.status_code != 200:
                 print(
                     f"❌ 批量查詢 {locale} 失敗 (Status: {response.status_code}): {response.text[:200]}"
@@ -322,23 +329,42 @@ class XboxScraper:
             data = response.json()
             results = {}
 
-            # 解析回傳的產品資訊
-            # 注意：此 API 回傳的是以 ID 為鍵的字典，例如 {"PID1": {...}, "PID2": {...}}
-            for pid, product in data.items():
-                if not isinstance(product, dict):
+            for product in data.get("Products", []):
+                pid = product.get("ProductId")
+                if not pid:
                     continue
 
-                prices = product.get("specificPrices", {}).get("purchaseable", [])
-                title = product.get("title", "Unknown")
+                # 取得本地化標題
+                localized = product.get("LocalizedProperties", [{}])
+                title = localized[0].get("ProductTitle", "Unknown") if localized else "Unknown"
+
+                # 判斷是否可購買，並取得價格
+                can_purchase = False
+                price_list = []
+
+                for sku_avail in product.get("DisplaySkuAvailabilities", []):
+                    for avail in sku_avail.get("Availabilities", []):
+                        if "Purchase" in avail.get("Actions", []):
+                            can_purchase = True
+                            price_data = avail.get("OrderManagementData", {}).get("Price", {})
+                            if price_data:
+                                price_list.append({
+                                    "listPrice": price_data.get("ListPrice"),
+                                    "currency": price_data.get("CurrencyCode"),
+                                })
+                            break
+                    if can_purchase:
+                        break
 
                 results[pid] = {
                     "found": True,
                     "title": title,
                     "slug": quote(title),
-                    "purchaseable": len(prices) > 0,
-                    "price_list": prices,
-                    "is_base_game": self.is_game_base(product),
+                    "purchaseable": can_purchase,
+                    "price_list": price_list,
+                    "is_base_game": True,  # JP 掃描階段已過濾，此處保持 True
                 }
+
             return results
 
         except requests.exceptions.ConnectionError as e:
@@ -349,7 +375,7 @@ class XboxScraper:
             return {}
 
     def check_target_games_v3(
-        self, source_games: Dict[str, Dict], target_locale: str, batch_size: int = 5
+        self, source_games: Dict[str, Dict], target_locale: str, batch_size: int = 50
     ) -> Dict[str, Dict]:
         """
         V3.0 優化版檢查：直接針對 ID 清單向 API 點名，不再掃描分頁
@@ -475,7 +501,6 @@ class XboxScraper:
             },
         }
 
-    # Removed check_target_games and check_target_games_with_multiple_sorts as they are replaced by check_target_games_v3
     def is_game_base(self, product: Dict) -> bool:
         """
         判斷產品是否為遊戲本體
