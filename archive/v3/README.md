@@ -1,4 +1,4 @@
-# Xbox 商店遊戲對比工具 - V3.1 版本
+# Xbox 商店遊戲對比工具 - V3 版本
 
 支持增量更新、資料持久化、精準批量查詢、DLC 過濾與 HTML 報表的性能優化版本。
 
@@ -81,7 +81,7 @@ python xbox_compare_v3.py --max-pages 0
 | 檔案 | 說明 |
 |------|------|
 | `games.db` | SQLite 資料庫（自動建立） |
-| `all_games.csv` | CSV 全量對照表（含所有狀態，Excel 直接開啟支援中文） |
+| `jp_only_games.csv` | CSV 對照表（與 V1 相同格式） |
 | `report.html` | HTML 可視化報表 |
 
 用瀏覽器打開 `report.html` 即可查看。
@@ -245,7 +245,7 @@ xbox-marketplace-compare/
 ├── scraper.py                   # 爬蟲層
 ├── html_generator.py            # HTML 報表生成器
 ├── games.db                     # 資料庫（首次運行時建立）
-├── all_games.csv                # 輸出 CSV（全量，含 UTF-8 BOM）
+├── jp_only_games.csv            # 輸出 CSV
 ├── report.html                  # 輸出 HTML 報表
 ├── README.md                    # 本文件
 ├── archive/                     # 舊版本備份
@@ -376,16 +376,6 @@ A: 不需要。V3 已改用 Microsoft DisplayCatalog 公開 API，`AUTH_TOKEN` �
 ### Q: 資料庫損壞了？
 A: 直接刪除 `games.db`，下次運行會自動重建。注意：首次運行必須用 `--browse-all 1`。
 
-### Q: 升級程式版本後，價格或資料顯示不正確？
-A: 舊版本寫入的資料庫可能與新版本不相容，或含有過時的價格數據。**升級版本後建議刪除 `games.db` 並重新完整掃描：**
-
-```bash
-del games.db
-python xbox_compare_v3.py --browse-all 1 --multi-sort 1
-```
-
-這樣可確保所有遊戲的價格與狀態都是最新 API 數據。
-
 ### Q: 能支持其他地區嗎？
 A: 目前只支持日本 ↔ 台灣，後續版本計畫擴展。
 
@@ -393,16 +383,6 @@ A: 目前只支持日本 ↔ 台灣，後續版本計畫擴展。
 A: 這是正常的。如果頻繁更新報表，建議只在必要時使用 `--browse-all 1`，日常用 `--browse-all 0` 快速更新。
 
 ## 📝 更新日誌
-
-### V3.1 (2026-04-17) - CSV 全量輸出 + 執行時間顯示
-
-**新增功能：**
-- ✨ **執行時間顯示** - 完成後顯示「總耗時：X 時 X 分 X 秒」
-- ✨ **CSV 改為全量輸出** - 輸出所有遊戲（available / region-locked / delisted），方便在 Excel 自行篩選
-- ✨ **CSV 檔名改為 `all_games.csv`** - 原 `jp_only_games.csv` 名稱與全量輸出不符
-- ✨ **CSV 加入 UTF-8 BOM** - `encoding='utf-8-sig'`，Excel 直接開啟中文不亂碼
-
----
 
 ### V3.0 (2026-04-15) - 批量精準查詢 + 無需 Token
 

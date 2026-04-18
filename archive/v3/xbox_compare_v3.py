@@ -6,7 +6,6 @@ Xbox 商店遊戲對比工具 - V3 版本
 
 import argparse
 import sys
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict
@@ -18,7 +17,7 @@ from scraper import XboxScraper
 # ===== 設定 =====
 SOURCE_LOCALE = "ja-JP"
 TARGET_LOCALE = "zh-TW"
-OUTPUT_CSV = "all_games.csv"
+OUTPUT_CSV = "jp_only_games.csv"
 OUTPUT_HTML = "report.html"
 DB_PATH = "games.db"
 MAX_PAGES = 0  # 0 = 不限制頁數，測試時可設置為較小的值（如 5 或 10）
@@ -349,13 +348,12 @@ class XboxMarketplaceComparerV3:
         print("✅ 重檢完成")
         return True
 
-    def export_results(self, csv_mode: str = "full", html_mode: str = "limited") -> bool:
+    def export_results(self, mode: str = "limited") -> bool:
         """
         匯出結果（CSV + HTML 報表）
 
         Args:
-            csv_mode:  CSV 輸出模式  ('full' = 全部遊戲, 'limited' = 只列非 available)
-            html_mode: HTML 輸出模式 ('full' = 全部遊戲, 'limited' = 只列非 available)
+            mode: 'limited' = 只列限定遊戲，'full' = 列所有遊戲
 
         Returns:
             是否成功
@@ -364,7 +362,7 @@ class XboxMarketplaceComparerV3:
 
         try:
             # 匯出 CSV (會根據 self.filter_dlc 決定是否只匯出遊戲本體)
-            self.db.export_csv(OUTPUT_CSV, mode=csv_mode, filter_dlc=self.filter_dlc)
+            self.db.export_csv(OUTPUT_CSV, mode=mode, filter_dlc=self.filter_dlc)
 
             # 統計資訊
             stats = self.db.get_statistics(TARGET_LOCALE)
@@ -375,7 +373,7 @@ class XboxMarketplaceComparerV3:
 
             # 生成 HTML 報表
             print("\n📄 生成 HTML 報表...")
-            self._generate_html_report(stats, mode=html_mode)
+            self._generate_html_report(stats, mode=mode)
 
             return True
         except Exception as e:
@@ -502,8 +500,6 @@ class XboxMarketplaceComparerV3:
             max_pages: 最多抓取幾頁（測試用）
         """
         try:
-            start_time = time.time()
-
             # 驗證 token
             if not self._validate_auth_token():
                 sys.exit(1)
@@ -526,15 +522,11 @@ class XboxMarketplaceComparerV3:
             if recheck_delisted and browse_all == 0:
                 self.recheck_delisted_games(max_pages=max_pages)
 
-            # 匯出結果（csv_mode / html_mode 各自獨立：'full' = 全部, 'limited' = 只列非 available）
-            if not self.export_results(csv_mode="full", html_mode="limited"):
+            # 匯出結果
+            if not self.export_results(mode="limited"):
                 sys.exit(1)
 
-            elapsed = time.time() - start_time
-            h = int(elapsed // 3600)
-            m = int((elapsed % 3600) // 60)
-            s = int(elapsed % 60)
-            print(f"\n✅ 完成！總耗時：{h} 時 {m} 分 {s} 秒")
+            print("\n✅ 完成！")
 
         finally:
             if self.db:

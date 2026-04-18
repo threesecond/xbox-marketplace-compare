@@ -42,7 +42,7 @@ Thumbs.db
 games.db
 *.log
 report.html
-*.csv
+# *.csv
 
 # AI tools
 .ai/

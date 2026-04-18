@@ -567,7 +567,7 @@ class GameDatabase:
             })
 
         # 寫 CSV
-        with open(output_file, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(output_rows)
