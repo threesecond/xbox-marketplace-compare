@@ -6,6 +6,7 @@ Xbox 遊戲對比工具 - 爬蟲層
 
 import base64
 import json
+import logging
 import time
 import uuid
 from typing import Dict, List, Optional, Set
@@ -14,6 +15,9 @@ from urllib.parse import quote
 import requests
 
 from dlc_identifier import is_game_base as _is_game_base
+
+
+logger = logging.getLogger(__name__)
 
 
 class XboxScraper:
@@ -146,36 +150,36 @@ class XboxScraper:
             )
 
             if response.status_code == 401:
-                print("❌ 認證失敗 (401) - XBL3.0 token 無效或已過期")
+                logger.error("❌ 認證失敗 (401) - XBL3.0 token 無效或已過期")
                 return None
 
             if response.status_code == 429:  # Rate Limited
                 if retry_count < 3:
                     wait_time = 5 * (retry_count + 1)
-                    print(f"⏱️  被限流 (429)，等待 {wait_time} 秒後重試...")
+                    logger.warning(f"⏱️  被限流 (429)，等待 {wait_time} 秒後重試...")
                     time.sleep(wait_time)
                     return self._fetch_page(
                         locale, encoded_ct, orderby, retry_count + 1
                     )
                 else:
-                    print("❌ 重試次數已達上限")
+                    logger.error("❌ 重試次數已達上限")
                     return None
 
             if response.status_code != 200:
-                print(f"❌ API 錯誤 ({response.status_code}): {response.text[:100]}")
+                logger.error(f"❌ API 錯誤 ({response.status_code}): {response.text[:100]}")
                 return None
 
             return response.json()
 
         except requests.exceptions.Timeout:
             if retry_count < 2:
-                print("⏱️  請求超時，重試中...")
+                logger.warning("⏱️  請求超時，重試中...")
                 time.sleep(2)
                 return self._fetch_page(locale, encoded_ct, orderby, retry_count + 1)
             return None
 
         except Exception as e:
-            print(f"❌ 請求失敗: {e}")
+            logger.error(f"❌ 請求失敗: {e}")
             return None
 
     def fetch_all_games(
@@ -203,17 +207,17 @@ class XboxScraper:
         skip_count = 0
 
         sort_label = f"({orderby})" if orderby else ""
-        print(f"\n📥 開始抓取 {locale} 地區遊戲清單 {sort_label}...")
+        logger.info(f"\n📥 開始抓取 {locale} 地區遊戲清單 {sort_label}...")
         if skip_existing:
-            print(f"   (跳過已存在的 {len(skip_existing)} 款遊戲)")
-        print("-" * 60)
+            logger.info(f"   (跳過已存在的 {len(skip_existing)} 款遊戲)")
+        logger.info("-" * 60)
 
         while True:
             page_count += 1
 
             response = self._fetch_page(locale, encoded_ct, orderby)
             if not response:
-                print(f"❌ 第 {page_count} 頁抓取失敗，停止")
+                logger.error(f"❌ 第 {page_count} 頁抓取失敗，停止")
                 break
 
             product_summaries = response.get("productSummaries", [])
@@ -259,10 +263,11 @@ class XboxScraper:
                 .get(self.channel_key, {})
                 .get("totalItems", 0)
             )
-            print(f"✅ 第 {page_count} 頁：新增 {page_game_count} 款", end="")
+            message = f"✅ 第 {page_count} 頁：新增 {page_game_count} 款"
             if skip_existing and skip_count > 0:
-                print(f"（跳過 {skip_count} 款）", end="")
-            print(f"，累計 {len(games)} / {total_in_region}")
+                message += f"（跳過 {skip_count} 款）"
+            message += f"，累計 {len(games)} / {total_in_region}"
+            logger.info(message)
 
             # 檢查下一頁
             channel_data = response.get("channels", {}).get(self.channel_key, {})
@@ -278,11 +283,11 @@ class XboxScraper:
                     has_more = False
 
             if not has_more:
-                print(f"✅ 已抓取完成 ({len(games)} 款新遊戲)")
+                logger.info(f"✅ 已抓取完成 ({len(games)} 款新遊戲)")
                 break
 
             if max_pages and page_count >= max_pages:
-                print(f"⚠️  達到頁數上限 ({max_pages} 頁)")
+                logger.warning(f"⚠️  達到頁數上限 ({max_pages} 頁)")
                 break
 
             time.sleep(self.request_delay)
@@ -291,7 +296,7 @@ class XboxScraper:
 
     def fetch_products_by_ids(
         self, product_ids: List[str], locale: str
-    ) -> Dict[str, Dict]:
+    ) -> Optional[Dict[str, Dict]]:
         """
         V3.0 核心方法：透過 Microsoft DisplayCatalog API 批量查詢產品狀態
 
@@ -321,10 +326,10 @@ class XboxScraper:
         try:
             response = requests.get(url, headers=headers, timeout=30)
             if response.status_code != 200:
-                print(
+                logger.error(
                     f"❌ 批量查詢 {locale} 失敗 (Status: {response.status_code}): {response.text[:200]}"
                 )
-                return {}
+                return None
 
             data = response.json()
             results = {}
@@ -368,11 +373,11 @@ class XboxScraper:
             return results
 
         except requests.exceptions.ConnectionError as e:
-            print(f"❌ 批量查詢 {locale} 連線錯誤: {e}")
-            return {}
+            logger.error(f"❌ 批量查詢 {locale} 連線錯誤: {e}")
+            return None
         except Exception as e:
-            print(f"❌ 批量查詢 {locale} 失敗: {e}")
-            return {}
+            logger.error(f"❌ 批量查詢 {locale} 失敗: {e}")
+            return None
 
     def check_target_games_v3(
         self, source_games: Dict[str, Dict], target_locale: str, batch_size: int = 50
@@ -384,14 +389,22 @@ class XboxScraper:
         product_ids = list(source_games.keys())
         total = len(product_ids)
 
-        print(f"\n🚀 V3 模式：正在精準查詢 {total} 款遊戲在 {target_locale} 的狀態...")
+        logger.info(f"\n🚀 V3 模式：正在精準查詢 {total} 款遊戲在 {target_locale} 的狀態...")
 
         for i in range(0, total, batch_size):
             batch = product_ids[i : i + batch_size]
-            print(f"   進度: {i}/{total} 款...", end="\r")
+            logger.info(f"   進度: {i}/{total} 款...")
 
             batch_results = self.fetch_products_by_ids(batch, target_locale)
-            all_target_data.update(batch_results)
+            if batch_results is None:
+                for pid in batch:
+                    all_target_data[pid] = {
+                        "found": False,
+                        "purchaseable": False,
+                        "query_failed": True,
+                    }
+            else:
+                all_target_data.update(batch_results)
 
             time.sleep(self.request_delay)
 
@@ -448,19 +461,19 @@ class XboxScraper:
                 "ReleaseDate+Desc",  # 最新發行優先
                 "Price+Asc",  # 最便宜優先
             ]
-            print(f"\n🔍 多排序方式掃描 {locale} 地區遊戲...")
-            print(f"   排序方式: {[s or '預設' for s in sort_methods]}")
-            print("=" * 60)
+            logger.info(f"\n🔍 多排序方式掃描 {locale} 地區遊戲...")
+            logger.info(f"   排序方式: {[s or '預設' for s in sort_methods]}")
+            logger.info("=" * 60)
         else:
             # 只用預設排序（快速）
             sort_methods = [None]
-            print(f"\n📥 掃描 {locale} 地區遊戲（預設排序）...")
-            print("=" * 60)
+            logger.info(f"\n📥 掃描 {locale} 地區遊戲（預設排序）...")
+            logger.info("=" * 60)
 
         for sort_method in sort_methods:
             sort_label = sort_method or "預設"
             if multi_sort:
-                print(f"\n🔄 掃描 [{sort_label}]...")
+                logger.info(f"\n🔄 掃描 [{sort_label}]...")
 
             games = self.fetch_all_games(
                 locale,
@@ -482,15 +495,15 @@ class XboxScraper:
                 time.sleep(self.request_delay)
 
         # 統計結果
-        print("\n" + "=" * 60)
+        logger.info("\n" + "=" * 60)
         if multi_sort:
-            print("📊 多排序掃描完成：")
-            print("   各排序方式找到的遊戲數：")
+            logger.info("📊 多排序掃描完成：")
+            logger.info("   各排序方式找到的遊戲數：")
             for sort_label, count in games_by_sort.items():
                 new_count = new_games_by_sort[sort_label]
-                print(f"      [{sort_label}] {count} 款 (新增 {new_count} 款)")
-        print(f"   ✅ 總計：{len(all_games)} 款")
-        print("=" * 60)
+                logger.info(f"      [{sort_label}] {count} 款 (新增 {new_count} 款)")
+        logger.info(f"   ✅ 總計：{len(all_games)} 款")
+        logger.info("=" * 60)
 
         return {
             "games": all_games,
@@ -520,7 +533,10 @@ class XboxScraper:
             'available'     - 可購買
             'region-locked' - 有上架但無法購買（地區鎖定）
             'delisted'      - 未出現在目標地區商店
+            'query-failed'  - 查詢失敗，結果不可信
         """
+        if target_game_info.get("query_failed", False):
+            return "query-failed"
         if not target_game_info.get("found", False):
             return "delisted"
         elif target_game_info.get("purchaseable", False):
@@ -539,8 +555,8 @@ if __name__ == "__main__":
 
     # 爬取日本商店的前 2 頁（測試）
     ja_games = scraper.fetch_all_games("ja-JP", max_pages=2)
-    print(f"\n取得 {len(ja_games)} 款遊戲")
+    logger.info(f"\n取得 {len(ja_games)} 款遊戲")
 
     # V3 批量檢查台灣狀態
     tw_games = scraper.check_target_games_v3(ja_games, "zh-TW")
-    print(f"\n檢查完成，共 {len(tw_games)} 筆")
+    logger.info(f"\n檢查完成，共 {len(tw_games)} 筆")

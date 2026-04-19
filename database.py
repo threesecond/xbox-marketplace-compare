@@ -5,11 +5,15 @@ Xbox 遊戲對比工具 - 資料庫層
 """
 
 import sqlite3
-import os
 import csv
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple, Optional, Set
-from pathlib import Path
+
+
+DB_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+CURRENT_SCHEMA_VERSION = 3
+logger = logging.getLogger(__name__)
 
 
 class GameDatabase:
@@ -31,11 +35,25 @@ class GameDatabase:
         try:
             self.conn = sqlite3.connect(self.db_path)
             self.conn.row_factory = sqlite3.Row
-            print(f"✅ 資料庫連接成功: {self.db_path}")
+            logger.info(f"✅ 資料庫連接成功: {self.db_path}")
             self._upgrade_schema()
         except sqlite3.Error as e:
-            print(f"❌ 資料庫連接失敗: {e}")
+            logger.error(f"❌ 資料庫連接失敗: {e}")
             raise
+
+    @staticmethod
+    def utc_now_string() -> str:
+        """取得目前 UTC 時間字串，統一資料庫儲存格式。"""
+        return datetime.now(timezone.utc).strftime(DB_TIMESTAMP_FORMAT)
+
+    @staticmethod
+    def parse_db_timestamp(timestamp_str: Optional[str]) -> Optional[datetime]:
+        """將資料庫中的時間字串解析為 UTC datetime。"""
+        if not timestamp_str:
+            return None
+        return datetime.strptime(timestamp_str, DB_TIMESTAMP_FORMAT).replace(
+            tzinfo=timezone.utc
+        )
 
     def _table_exists(self, table_name: str) -> bool:
         """檢查資料表是否存在"""
@@ -43,44 +61,113 @@ class GameDatabase:
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,))
         return cursor.fetchone() is not None
 
-    def _upgrade_schema(self):
-        """檢查並升級資料庫 schema"""
+    def _ensure_schema_meta_table(self):
+        """確保 schema 版本資訊表存在。"""
         cursor = self.conn.cursor()
-        
-        # 升級 games 表
-        if self._table_exists('games'):
-            columns = {row['name'] for row in cursor.execute("PRAGMA table_info(games);").fetchall()}
-            
-            # 添加 is_base_game 列（如果不存在）
-            if 'is_base_game' not in columns:
-                try:
-                    cursor.execute("ALTER TABLE games ADD COLUMN is_base_game INTEGER DEFAULT 1;")
-                    self.conn.commit()
-                    print("✅ 已升級 games 表：加入 is_base_game 欄位")
-                except sqlite3.Error:
-                    pass
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            """
+        )
+        self.conn.commit()
 
-        # 升級 regions 表（原有邏輯）
-        if self._table_exists('regions'):
-            columns = {row['name'] for row in cursor.execute("PRAGMA table_info(regions);").fetchall()}
-            
-            # 添加 region_title 列（如果不存在）
-            if 'region_title' not in columns:
-                try:
-                    cursor.execute("ALTER TABLE regions ADD COLUMN region_title TEXT;")
-                    self.conn.commit()
-                    print("✅ 已升級 regions 表：加入 region_title 欄位")
-                except sqlite3.Error:
-                    pass
-            
-            # 添加 status_change_count 列（如果不存在）
-            if 'status_change_count' not in columns:
-                try:
-                    cursor.execute("ALTER TABLE regions ADD COLUMN status_change_count INTEGER DEFAULT 0;")
-                    self.conn.commit()
-                    print("✅ 已升級 regions 表：加入 status_change_count 欄位")
-                except sqlite3.Error:
-                    pass
+    def _get_schema_version(self) -> int:
+        """取得目前 schema 版本。"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM schema_meta WHERE key = 'schema_version';")
+        row = cursor.fetchone()
+        return int(row["value"]) if row else 0
+
+    def _set_schema_version(self, version: int):
+        """寫入 schema 版本。"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO schema_meta (key, value)
+            VALUES ('schema_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """,
+            (str(version),),
+        )
+        self.conn.commit()
+
+    def _infer_legacy_schema_version(self) -> int:
+        """
+        推測舊資料庫的 schema 版本。
+
+        這讓既有資料庫在沒有版本資訊表的情況下，也能被正確接手並補齊 migration。
+        """
+        if not self._table_exists("games") or not self._table_exists("regions"):
+            return 0
+
+        cursor = self.conn.cursor()
+        game_columns = {
+            row["name"] for row in cursor.execute("PRAGMA table_info(games);").fetchall()
+        }
+        region_columns = {
+            row["name"] for row in cursor.execute("PRAGMA table_info(regions);").fetchall()
+        }
+
+        version = 1
+        if {"region_title", "status_change_count"}.issubset(region_columns):
+            version = 2
+        if "is_base_game" in game_columns and version >= 2:
+            version = 3
+        return version
+
+    def _migrate_to_v2(self):
+        """升級到 schema v2：補齊地區標題與狀態變動次數欄位。"""
+        cursor = self.conn.cursor()
+        columns = {
+            row["name"] for row in cursor.execute("PRAGMA table_info(regions);").fetchall()
+        }
+
+        if "region_title" not in columns:
+            cursor.execute("ALTER TABLE regions ADD COLUMN region_title TEXT;")
+            logger.info("✅ 已升級 regions 表：加入 region_title 欄位")
+        if "status_change_count" not in columns:
+            cursor.execute(
+                "ALTER TABLE regions ADD COLUMN status_change_count INTEGER DEFAULT 0;"
+            )
+            logger.info("✅ 已升級 regions 表：加入 status_change_count 欄位")
+
+        self.conn.commit()
+
+    def _migrate_to_v3(self):
+        """升級到 schema v3：補齊遊戲本體標記欄位。"""
+        cursor = self.conn.cursor()
+        columns = {
+            row["name"] for row in cursor.execute("PRAGMA table_info(games);").fetchall()
+        }
+
+        if "is_base_game" not in columns:
+            cursor.execute("ALTER TABLE games ADD COLUMN is_base_game INTEGER DEFAULT 1;")
+            self.conn.commit()
+            logger.info("✅ 已升級 games 表：加入 is_base_game 欄位")
+
+    def _upgrade_schema(self):
+        """檢查並升級資料庫 schema。"""
+        self._ensure_schema_meta_table()
+
+        version = self._get_schema_version()
+        if version == 0:
+            inferred_version = self._infer_legacy_schema_version()
+            if inferred_version:
+                version = inferred_version
+                self._set_schema_version(version)
+
+        if version < 2 and self._table_exists("regions"):
+            self._migrate_to_v2()
+            version = 2
+            self._set_schema_version(version)
+
+        if version < 3 and self._table_exists("games"):
+            self._migrate_to_v3()
+            version = 3
+            self._set_schema_version(version)
 
     def init_db(self):
         """初始化資料庫 - 建立所有資料表"""
@@ -137,17 +224,18 @@ class GameDatabase:
             """)
 
             self.conn.commit()
-            print("✅ 資料庫初始化完成")
+            self._set_schema_version(CURRENT_SCHEMA_VERSION)
+            logger.info("✅ 資料庫初始化完成")
 
         except sqlite3.Error as e:
-            print(f"❌ 資料庫初始化失敗: {e}")
+            logger.error(f"❌ 資料庫初始化失敗: {e}")
             raise
 
     def close(self):
         """關閉資料庫連接"""
         if self.conn:
             self.conn.close()
-            print("✅ 資料庫連接已關閉")
+            logger.info("✅ 資料庫連接已關閉")
 
     def get_existing_games(self) -> Set[str]:
         """
@@ -217,6 +305,15 @@ class GameDatabase:
                 self.conn.commit()
             return self.get_game_id(product_id)
 
+    def _get_region_record(self, game_id: int, locale: str):
+        """取得單一地區狀態記錄。"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, status, check_count FROM regions WHERE game_id = ? AND locale = ?;",
+            (game_id, locale),
+        )
+        return cursor.fetchone()
+
     def update_region_status(
         self,
         game_id: int,
@@ -232,36 +329,31 @@ class GameDatabase:
         Args:
             game_id: 遊戲 ID
             locale: 地區代碼 (e.g., 'zh-TW')
-            status: 狀態 ('available' / 'region-locked' / 'delisted')
+            status: 狀態 ('available' / 'region-locked' / 'delisted' / 'query-failed')
             price: 該地區價格
             currency: 該地區貨幣
         """
         cursor = self.conn.cursor()
-        
-        # 檢查記錄是否存在
-        cursor.execute(
-            "SELECT id, check_count FROM regions WHERE game_id = ? AND locale = ?;",
-            (game_id, locale)
-        )
-        existing = cursor.fetchone()
+        existing = self._get_region_record(game_id, locale)
+        checked_at = self.utc_now_string()
 
         if existing:
             # 更新現有記錄，增加 check_count
             cursor.execute("""
                 UPDATE regions
                 SET status = ?, price = ?, currency = ?, region_title = ?,
-                    last_checked_date = CURRENT_TIMESTAMP, 
+                    last_checked_date = ?,
                     check_count = check_count + 1,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE game_id = ? AND locale = ?
-            """, (status, price, currency, region_title, game_id, locale))
+            """, (status, price, currency, region_title, checked_at, checked_at, game_id, locale))
         else:
             # 新增記錄
             cursor.execute("""
                 INSERT INTO regions 
                 (game_id, locale, region_title, status, price, currency, last_checked_date, check_count, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
-            """, (game_id, locale, region_title, status, price, currency))
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+            """, (game_id, locale, region_title, status, price, currency, checked_at, checked_at))
 
         self.conn.commit()
 
@@ -283,7 +375,9 @@ class GameDatabase:
             [(game_id, product_id, ja_title), ...]
         """
         cursor = self.conn.cursor()
-        threshold_date = (datetime.now() - timedelta(days=days_threshold)).isoformat()
+        threshold_date = (
+            datetime.now(timezone.utc) - timedelta(days=days_threshold)
+        ).strftime(DB_TIMESTAMP_FORMAT)
 
         cursor.execute("""
             SELECT g.id, g.product_id, g.ja_title, g.is_base_game
@@ -328,7 +422,7 @@ class GameDatabase:
 
     def get_delisted_or_regionlocked_games(self, locale: str) -> List[Tuple[int, str, str]]:
         """
-        取得狀態為 delisted 或 region-locked 的遊戲
+        取得狀態為 delisted、region-locked 或 query-failed 的遊戲
 
         用於 browse_all=0 時，只重新檢查有問題的遊戲
 
@@ -343,7 +437,7 @@ class GameDatabase:
             SELECT g.id, g.product_id, g.ja_title, g.is_base_game
             FROM games g 
             INNER JOIN regions r ON g.id = r.game_id
-            WHERE r.locale = ? AND r.status IN ('delisted', 'region-locked')
+            WHERE r.locale = ? AND r.status IN ('delisted', 'region-locked', 'query-failed')
             ORDER BY r.updated_at DESC;
         """, (locale,))
 
@@ -400,12 +494,9 @@ class GameDatabase:
         cursor = self.conn.cursor()
 
         # 檢查舊狀態
-        cursor.execute(
-            "SELECT status FROM regions WHERE game_id = ? AND locale = ?;",
-            (game_id, locale)
-        )
-        existing = cursor.fetchone()
+        existing = self._get_region_record(game_id, locale)
         old_status = existing['status'] if existing else None
+        checked_at = self.utc_now_string()
 
         # 判斷是否有變動
         has_change = old_status != new_status
@@ -417,29 +508,29 @@ class GameDatabase:
                 cursor.execute("""
                     UPDATE regions
                     SET status = ?, price = ?, currency = ?, region_title = ?,
-                        last_checked_date = CURRENT_TIMESTAMP,
+                        last_checked_date = ?,
                         check_count = check_count + 1,
                         status_change_count = status_change_count + 1,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = ?
                     WHERE game_id = ? AND locale = ?
-                """, (new_status, price, currency, region_title, game_id, locale))
+                """, (new_status, price, currency, region_title, checked_at, checked_at, game_id, locale))
             else:
                 # 無變動：保持原狀
                 cursor.execute("""
                     UPDATE regions
                     SET price = ?, currency = ?, region_title = ?,
-                        last_checked_date = CURRENT_TIMESTAMP,
+                        last_checked_date = ?,
                         check_count = check_count + 1,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = ?
                     WHERE game_id = ? AND locale = ?
-                """, (price, currency, region_title, game_id, locale))
+                """, (price, currency, region_title, checked_at, checked_at, game_id, locale))
         else:
             # 新增記錄
             cursor.execute("""
                 INSERT INTO regions
                 (game_id, locale, region_title, status, price, currency, last_checked_date, check_count, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
-            """, (game_id, locale, region_title, new_status, price, currency))
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+            """, (game_id, locale, region_title, new_status, price, currency, checked_at, checked_at))
 
         self.conn.commit()
         return has_change
@@ -455,7 +546,7 @@ class GameDatabase:
             scan_time: 掃描時間（ISO format），預設為當前時間
         """
         if scan_time is None:
-            scan_time = datetime.now().isoformat()
+            scan_time = self.utc_now_string()
 
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -474,7 +565,7 @@ class GameDatabase:
             locale: 地區代碼
         
         Returns:
-            {available: N, region-locked: N, delisted: N}
+            {available: N, region-locked: N, delisted: N, query-failed: N}
         """
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -484,7 +575,12 @@ class GameDatabase:
             GROUP BY r.status;
         """, (locale,))
 
-        stats = {'available': 0, 'region-locked': 0, 'delisted': 0}
+        stats = {
+            'available': 0,
+            'region-locked': 0,
+            'delisted': 0,
+            'query-failed': 0,
+        }
         for row in cursor.fetchall():
             stats[row['status']] = row['count']
         return stats
@@ -572,8 +668,49 @@ class GameDatabase:
             writer.writeheader()
             writer.writerows(output_rows)
 
-        print(f"✅ CSV 已匯出: {output_file}")
-        print(f"   共 {len(output_rows)} 筆記錄")
+        logger.info(f"✅ CSV 已匯出: {output_file}")
+        logger.info(f"   共 {len(output_rows)} 筆記錄")
+
+    def fetch_games_with_regions(self) -> Dict[str, Dict]:
+        """
+        以報表輸出友善的結構，回傳所有遊戲與其地區資料。
+
+        這個方法的目的，是把報表查詢與資料重組收回資料庫層，
+        讓 pipeline 不需要直接操作 SQL。
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT g.product_id, g.ja_title, g.ja_price, g.ja_currency,
+                   r.locale, r.region_title, r.status, r.price, r.currency,
+                   r.last_checked_date, g.is_base_game
+            FROM games g
+            LEFT JOIN regions r ON g.id = r.game_id
+            ORDER BY g.first_seen_date DESC;
+        """)
+
+        games_dict = {}
+        for row in cursor.fetchall():
+            product_id = row["product_id"]
+            if product_id not in games_dict:
+                games_dict[product_id] = {
+                    "product_id": product_id,
+                    "ja_title": row["ja_title"],
+                    "ja_price": row["ja_price"],
+                    "ja_currency": row["ja_currency"],
+                    "regions": {},
+                    "is_base_game": row["is_base_game"],
+                }
+
+            if row["locale"]:
+                games_dict[product_id]["regions"][row["locale"]] = {
+                    "region_title": row["region_title"],
+                    "status": row["status"],
+                    "price": row["price"],
+                    "currency": row["currency"],
+                    "last_checked_date": row["last_checked_date"],
+                }
+
+        return games_dict
 
     def get_summary(self) -> Dict:
         """取得資料庫摘要"""
@@ -609,6 +746,6 @@ if __name__ == "__main__":
 
     # 查詢統計
     summary = db.get_summary()
-    print(summary)
+    logger.info(summary)
 
     db.close()

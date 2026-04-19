@@ -1,6 +1,6 @@
-# Xbox 商店遊戲對比工具 - V3.1 版本
+# Xbox 商店遊戲對比工具 - V4 版本
 
-支持增量更新、資料持久化、精準批量查詢、DLC 過濾與 HTML 報表的性能優化版本。
+支持增量更新、資料持久化、精準批量查詢、DLC 過濾、外部 HTML 模板、顯式 schema migration、`query-failed` 狀態與測試覆蓋的重構版本。
 
 ## 📦 核心功能
 
@@ -11,11 +11,14 @@
 ✅ **掃描時間戳記錄** - 記錄每次掃描的時間，便於審計和追蹤
 
 ### 掃描策略
-✅ **精準批量查詢 (V3 核心)** - 透過 Product ID 列表直接查詢目標商店，效率提升 25 倍  
+✅ **精準批量查詢（核心策略）** - 透過 Product ID 列表直接查詢目標商店，效率提升 25 倍  
 ✅ **雙模式掃描** - 增量模式（快速）+ 全量驗證模式（完整）  
 ✅ **多排序掃描策略** - 5 種排序方式確保涵蓋率（預設/標題升序/標題降序/發行日期/價格）  
 ✅ **可配置的多排序開關** - 根據需求選擇快速或完整掃描  
 ✅ **智能重檢機制** - 只重檢 delisted/region-locked 遊戲，跳過已確認 available 的遊戲
+✅ **查詢失敗顯式標記** - API 暫時失敗時記錄為 `query-failed`，不再誤判成 `delisted`
+✅ **執行時間統計** - 掃描結束後自動計算並顯示總耗時
+✅ **結構化 logging** - 統一 CLI 輸出與內部訊息分級
 
 ### 輸出和報告
 ✅ **HTML 可視化報表** - 生成漂亮的交互式網頁報告  
@@ -33,45 +36,35 @@ pip install requests jinja2
 
 ### 2. 配置設定
 
-打開 `xbox_compare_v3.py`，在 `# ===== 設定 =====` 區域修改：
+日常使用建議直接透過 `xbox_compare_v4.py` 執行。若想修改預設值，可調整 `config.py` 裡 `AppConfig` 的預設設定。
 
 ```python
-# ===== 設定 =====
-SOURCE_LOCALE = "ja-JP"         # 源地區（日本）
-TARGET_LOCALE = "zh-TW"         # 目標地區（台灣）
-FILTER_DLC = 1                  # 1=只統計遊戲本體（推薦），0=包含所有產品
-MAX_PAGES = 0                   # 最多掃描頁數，0=全量掃描（僅作用於源地區掃描）
-OUTPUT_HTML = "report.html"
-DB_PATH = "games.db"
+from config import AppConfig
 
-# 掃描模式：0=增量（日常快速），1=全量驗證（定期完整）
-BROWSE_ALL = 1
-
-# 多排序搜尋：0=預設排序（快速），1=5種排序（完整）
-MULTI_SORT = 0
-
-# AUTH_TOKEN 為選填，留空即可匿名執行
-AUTH_TOKEN = ""
-
-REQUEST_DELAY = 1.5  # 請求延遲（秒）
+config = AppConfig(
+    browse_all=1,
+    multi_sort=0,
+    filter_dlc=1,
+    request_delay=1.5,
+)
 ```
 
-> **AUTH_TOKEN 已不再必填。** V3 改用 Microsoft DisplayCatalog 公開 API 查詢目標地區狀態，JP browse API 也支援匿名存取，直接留空執行即可。
+> **AUTH_TOKEN 已不再必填。** V3 起改用 Microsoft DisplayCatalog 公開 API 查詢目標地區狀態，JP browse API 也支援匿名存取，直接留空執行即可。
 
 ### 3. 執行
 
 ```bash
 # 使用設定的預設值
-python xbox_compare_v3.py
+python xbox_compare_v4.py
 
 # 或用命令行參數覆蓋
-python xbox_compare_v3.py --browse-all 0 --multi-sort 0
+python xbox_compare_v4.py --browse-all 0 --multi-sort 0
 
 # 測試模式：只掃描前 1 頁（預設）
-python xbox_compare_v3.py --max-pages 1
+python xbox_compare_v4.py --max-pages 1
 
 # 完整掃描：掃描所有頁面
-python xbox_compare_v3.py --max-pages 0
+python xbox_compare_v4.py --max-pages 0
 ```
 
 ## 📊 輸出結果
@@ -81,7 +74,7 @@ python xbox_compare_v3.py --max-pages 0
 | 檔案 | 說明 |
 |------|------|
 | `games.db` | SQLite 資料庫（自動建立） |
-| `all_games.csv` | CSV 全量對照表（含所有狀態，Excel 直接開啟支援中文） |
+| `all_games.csv` | CSV 全量對照表（含 `available` / `region-locked` / `delisted` / `query-failed`） |
 | `report.html` | HTML 可視化報表 |
 
 用瀏覽器打開 `report.html` 即可查看。
@@ -91,7 +84,7 @@ python xbox_compare_v3.py --max-pages 0
 ### 模式 0: 增量更新 (推薦日常使用) ⭐
 
 ```bash
-python xbox_compare_v3.py --browse-all 0
+python xbox_compare_v4.py --browse-all 0
 ```
 
 **特點：**
@@ -110,7 +103,7 @@ python xbox_compare_v3.py --browse-all 0
 ### 模式 1: 全量驗證 (推薦週期性使用)
 
 ```bash
-python xbox_compare_v3.py --browse-all 1
+python xbox_compare_v4.py --browse-all 1
 ```
 
 **特點：**
@@ -132,7 +125,7 @@ python xbox_compare_v3.py --browse-all 1
 
 #### multi_sort = 0（只用預設排序，推薦日常使用）
 ```bash
-python xbox_compare_v3.py --multi-sort 0  # 快速，1-2 分鐘內完成
+python xbox_compare_v4.py --multi-sort 0  # 快速，1-2 分鐘內完成
 ```
 
 - 只掃描 1 種排序（預設）
@@ -142,7 +135,7 @@ python xbox_compare_v3.py --multi-sort 0  # 快速，1-2 分鐘內完成
 
 #### multi_sort = 1（多排序掃描，推薦定期使用）
 ```bash
-python xbox_compare_v3.py --multi-sort 1  # 完整但慢，30-60 分鐘
+python xbox_compare_v4.py --multi-sort 1  # 完整但慢，30-60 分鐘
 ```
 
 用 5 種排序方式重複掃描：
@@ -191,7 +184,7 @@ python xbox_compare_v3.py --multi-sort 1  # 完整但慢，30-60 分鐘
 ### 只測試前 N 頁
 
 ```bash
-python xbox_compare_v3.py --browse-all 1 --max-pages 2
+python xbox_compare_v4.py --browse-all 1 --max-pages 2
 ```
 
 > `--max-pages` 預設為 `1`，如果想抓取全部頁面請指定 `--max-pages 0`。
@@ -199,19 +192,19 @@ python xbox_compare_v3.py --browse-all 1 --max-pages 2
 ### 自訂資料庫路徑
 
 ```bash
-python xbox_compare_v3.py --browse-all 0 --db custom_db.db
+python xbox_compare_v4.py --browse-all 0 --db custom_db.db
 ```
 
 ### 自訂請求延遲
 
 ```bash
-python xbox_compare_v3.py --browse-all 1 --delay 2.0
+python xbox_compare_v4.py --browse-all 1 --delay 2.0
 ```
 
 ### 完整參數列表
 
 ```bash
-python xbox_compare_v3.py --help
+python xbox_compare_v4.py --help
 
 optional arguments:
   --token TOKEN        Xbox Live XBL3.0 token
@@ -240,10 +233,16 @@ optional arguments:
 
 ```
 xbox-marketplace-compare/
-├── xbox_compare_v3.py           # V3 主程序 ⭐
+├── xbox_compare_v4.py           # V4 主程序 ⭐
+├── config.py                    # 執行期設定模型
+├── pipeline.py                  # 流程編排層
+├── app_logging.py               # logging 初始化
 ├── database.py                  # 資料庫層
 ├── scraper.py                   # 爬蟲層
 ├── html_generator.py            # HTML 報表生成器
+├── templates/
+│   └── report.html              # 外部 HTML 模板
+├── tests/                       # 單元測試
 ├── games.db                     # 資料庫（首次運行時建立）
 ├── all_games.csv                # 輸出 CSV（全量，含 UTF-8 BOM）
 ├── report.html                  # 輸出 HTML 報表
@@ -251,10 +250,18 @@ xbox-marketplace-compare/
 ├── archive/                     # 舊版本備份
 │   ├── xbox_compare_v1.py       # V1 原始版本（已棄用）
 │   └── README.md                # Archive 說明
-└── .claude/
-    └── projects/
-        └── memory/              # 記憶系統
+└── .ai/                         # 開發日誌與內部備忘
 ```
+
+## 🧱 模組分工
+
+- `xbox_compare_v4.py`：CLI 入口，解析參數並啟動流程
+- `pipeline.py`：主流程編排，串接 scraper、database 與匯出
+- `config.py`：集中管理執行期設定
+- `scraper.py`：JP/TW 商店 API 存取與狀態判定
+- `database.py`：SQLite schema、migration、查詢與報表資料整理
+- `html_generator.py` + `templates/report.html`：HTML 報表輸出
+- `tests/`：核心邏輯與資料層回歸測試
 
 ## 💡 使用建議
 
@@ -262,7 +269,7 @@ xbox-marketplace-compare/
 
 ```bash
 # 首次必須用全量模式（資料庫為空）
-python xbox_compare_v3.py --browse-all 1 --multi-sort 1
+python xbox_compare_v4.py --browse-all 1 --multi-sort 1
 ```
 
 - 執行時間: 60+ 分鐘
@@ -274,7 +281,7 @@ python xbox_compare_v3.py --browse-all 1 --multi-sort 1
 
 ```bash
 # 最快的增量更新
-python xbox_compare_v3.py --browse-all 0 --multi-sort 0
+python xbox_compare_v4.py --browse-all 0 --multi-sort 0
 ```
 
 - 執行時間: 1-2 分鐘
@@ -287,7 +294,7 @@ python xbox_compare_v3.py --browse-all 0 --multi-sort 0
 
 ```bash
 # 完整的增量更新
-python xbox_compare_v3.py --browse-all 0 --multi-sort 1
+python xbox_compare_v4.py --browse-all 0 --multi-sort 1
 ```
 
 - 執行時間: 10-15 分鐘
@@ -300,7 +307,7 @@ python xbox_compare_v3.py --browse-all 0 --multi-sort 1
 
 ```bash
 # 完整的全量掃描
-python xbox_compare_v3.py --browse-all 1 --multi-sort 1
+python xbox_compare_v4.py --browse-all 1 --multi-sort 1
 ```
 
 - 執行時間: 60+ 分鐘
@@ -371,7 +378,10 @@ A:
 3. 改用 `--browse-all 0` 避免掃描所有遊戲
 
 ### Q: 需要 Token 嗎？
-A: 不需要。V3 已改用 Microsoft DisplayCatalog 公開 API，`AUTH_TOKEN` 留空即可正常執行。
+A: 不需要。V3 起已改用 Microsoft DisplayCatalog 公開 API，`AUTH_TOKEN` 留空即可正常執行。
+
+### Q: `query-failed` 是什麼？
+A: 代表目標商店查詢當次失敗，例如 API 暫時異常、逾時或批次查詢失敗。這個狀態和 `delisted` 不同，目的是避免把暫時性錯誤誤記成真的下架。之後重新執行掃描時，系統會再重查這些遊戲。
 
 ### Q: 資料庫損壞了？
 A: 直接刪除 `games.db`，下次運行會自動重建。注意：首次運行必須用 `--browse-all 1`。
@@ -381,7 +391,7 @@ A: 舊版本寫入的資料庫可能與新版本不相容，或含有過時的�
 
 ```bash
 del games.db
-python xbox_compare_v3.py --browse-all 1 --multi-sort 1
+python xbox_compare_v4.py --browse-all 1 --multi-sort 1
 ```
 
 這樣可確保所有遊戲的價格與狀態都是最新 API 數據。
@@ -393,6 +403,30 @@ A: 目前只支持日本 ↔ 台灣，後續版本計畫擴展。
 A: 這是正常的。如果頻繁更新報表，建議只在必要時使用 `--browse-all 1`，日常用 `--browse-all 0` 快速更新。
 
 ## 📝 更新日誌
+
+### V4.0 (2026-04-19) - 架構重構版本
+
+**架構整理：**
+- ✨ 新增 `config.py`，集中管理執行期設定
+- ✨ 新增 `pipeline.py`，將主流程從 CLI 入口抽離
+- ✨ 新增 `app_logging.py`，統一 logging 初始化
+- ✨ 主入口升級為 `xbox_compare_v4.py`
+
+**資料層改進：**
+- ✨ 統一資料庫時間戳為 UTC 字串格式
+- ✨ 新增 `schema_meta` 與 `schema_version`
+- ✨ 將 schema 升級整理為顯式 migration step
+- ✨ 將報表查詢資料重組邏輯收回 `database.py`
+
+**報表與模板：**
+- ✨ `html_generator.py` 改為載入外部模板 `templates/report.html`
+- ✨ 模板內容維持原樣，僅改善結構
+
+**品質保證：**
+- ✨ 新增並擴充自動化測試，目前共 14 個測試
+- ✨ 修正目標商店查詢失敗時誤判為 `delisted` 的問題，改為 `query-failed`
+
+---
 
 ### V3.1 (2026-04-17) - CSV 全量輸出 + 執行時間顯示
 
